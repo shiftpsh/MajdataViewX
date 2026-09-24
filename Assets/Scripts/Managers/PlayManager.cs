@@ -46,6 +46,10 @@ namespace MajdataViewX.Managers
         private void Awake()
         {
             _playManager = this;
+            // Notes read their speeds from here when a chart is loaded; start
+            // from the defaults so a chart pushed before the first Setting
+            // request does not get zero speeds (visible from the first frame).
+            ApplyNoteSettings(_setting);
         }
 
         // 这里是游戏内部的东西的启动初始化
@@ -141,15 +145,7 @@ namespace MajdataViewX.Managers
         {
             _setting = setting;
 
-            NoteHelper.NoteSettingsSS.Data = new NoteSettings()
-            {
-                AutoPlayMode = _setting.AutoMode,
-                TapSpeed = (float)(107.25 / (71.4184491 * Mathf.Pow(_setting.TapSpeed + 0.9975f, -0.985558604f))),
-                TouchSpeed = _setting.TouchSpeed,
-                LegacySlideLayer = _setting.LegacySlideLayer,
-                SmoothSlideAnime = _setting.SmoothSlideAnime,
-                MineAutoSlide = _setting.MineAutoSlide,
-            };
+            ApplyNoteSettings(_setting);
             //audio
             _audioManager.Setting(setting.GlobalAudioOffset, volumeSetting);
             //simulate
@@ -160,6 +156,19 @@ namespace MajdataViewX.Managers
             bgCover.color = new Color(0f, 0f, 0f, _setting.BackgroundDim);
             bgOutsideCover.color = new Color(0f, 0f, 0f, _setting.BackgroundOutsideDim);
             _bgManager.ResizeBg = _setting.ResizeBg;
+        }
+
+        private static void ApplyNoteSettings(MajViewSetting setting)
+        {
+            NoteHelper.NoteSettingsSS.Data = new NoteSettings()
+            {
+                AutoPlayMode = setting.AutoMode,
+                TapSpeed = (float)(107.25 / (71.4184491 * Mathf.Pow(setting.TapSpeed + 0.9975f, -0.985558604f))),
+                TouchSpeed = setting.TouchSpeed,
+                LegacySlideLayer = setting.LegacySlideLayer,
+                SmoothSlideAnime = setting.SmoothSlideAnime,
+                MineAutoSlide = setting.MineAutoSlide,
+            };
         }
 
         public async UniTask UpdateAsync(
