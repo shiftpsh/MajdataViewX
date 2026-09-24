@@ -43,7 +43,7 @@ namespace MajdataViewX.Managers
             IntPtr nativeTexture);
 #else
         [DllImport(EncoderDllName, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int video_encoder_submit_bgra(
+        private static extern int video_encoder_submit_rgba(
             IntPtr encoder,
             IntPtr pixels,
             int stride,
@@ -135,7 +135,12 @@ namespace MajdataViewX.Managers
                 width,
                 height,
                 0,
+#if RENDERINGOUT_D3D11
                 RenderTextureFormat.BGRA32)
+#else
+                // Metal cannot read back BGRA8; RGBA8 reads back on every API.
+                RenderTextureFormat.ARGB32)
+#endif
             {
                 name = "Screen Recorder Capture",
                 antiAliasing = 1,
@@ -193,7 +198,7 @@ namespace MajdataViewX.Managers
                     // The copy is queued on the GPU now, so reusing
                     // captureTexture next frame cannot race with it.
                     pendingReadbacks.Enqueue(
-                        AsyncGPUReadback.Request(captureTexture, 0, TextureFormat.BGRA32));
+                        AsyncGPUReadback.Request(captureTexture, 0, TextureFormat.RGBA32));
                     SubmitCompletedReadbacks(encoder, pendingReadbacks, width, height, MaxPendingReadbacks);
 #endif
 
@@ -278,7 +283,7 @@ namespace MajdataViewX.Managers
 
             // Row 0 of the readback is the top of the image unless the
             // graphics API is bottom-up (OpenGL).
-            var submitResult = video_encoder_submit_bgra(
+            var submitResult = video_encoder_submit_rgba(
                 encoder,
                 (IntPtr)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(pixels),
                 stride,

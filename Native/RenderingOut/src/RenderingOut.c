@@ -22,7 +22,7 @@
 #include <libswscale/swscale.h>
 
 /*
- * Frames waiting for the worker. Each slot is one width*height*4 BGRA copy,
+ * Frames waiting for the worker. Each slot is one width*height*4 RGBA copy,
  * so this bounds memory (~33 MB at 1080p) while still letting encoding
  * overlap Unity's rendering of the next frames.
  */
@@ -362,7 +362,7 @@ static int initialize_converter(VideoEncoder* ve)
 	int ret;
 
 	ve->sws = sws_getContext(
-		ve->width, ve->height, AV_PIX_FMT_BGRA,
+		ve->width, ve->height, AV_PIX_FMT_RGBA,
 		ve->width, ve->height, ve->ctx->pix_fmt,
 		SWS_BILINEAR | SWS_ACCURATE_RND | SWS_FULL_CHR_H_INP,
 		NULL, NULL, NULL);
@@ -671,7 +671,7 @@ done:
 /* Worker                                                                   */
 /* ------------------------------------------------------------------------ */
 
-static int encode_bgra_frame(VideoEncoder* ve, const AVFrame* bgra)
+static int encode_rgba_frame(VideoEncoder* ve, const AVFrame* rgba)
 {
 	int ret;
 
@@ -682,10 +682,10 @@ static int encode_bgra_frame(VideoEncoder* ve, const AVFrame* bgra)
 
 	sws_scale(
 		ve->sws,
-		(const uint8_t* const*)bgra->data, bgra->linesize,
+		(const uint8_t* const*)rgba->data, rgba->linesize,
 		0, ve->height,
 		ve->yuv_frame->data, ve->yuv_frame->linesize);
-	ve->yuv_frame->pts = bgra->pts;
+	ve->yuv_frame->pts = rgba->pts;
 
 	ret = send_and_write(ve, ve->ctx, ve->stream, ve->yuv_frame);
 	if (ret >= 0)
@@ -717,7 +717,7 @@ static void* encoder_worker_main(void* parameter)
 
 		/* After a failure keep draining so the producer never deadlocks. */
 		if (!failed)
-			ret = encode_bgra_frame(ve, frame);
+			ret = encode_rgba_frame(ve, frame);
 
 		pthread_mutex_lock(&ve->lock);
 		if (ret < 0 && ve->fatal_error >= 0)
@@ -848,7 +848,7 @@ fail:
 }
 
 RENDERINGOUT_EXPORT int RENDERINGOUT_API
-video_encoder_submit_bgra(
+video_encoder_submit_rgba(
 	VideoEncoder* ve,
 	const void* pixels,
 	int stride,
@@ -877,7 +877,7 @@ video_encoder_submit_bgra(
 		frame = av_frame_alloc();
 		if (!frame)
 			return AVERROR(ENOMEM);
-		frame->format = AV_PIX_FMT_BGRA;
+		frame->format = AV_PIX_FMT_RGBA;
 		frame->width = ve->width;
 		frame->height = ve->height;
 		ret = av_frame_get_buffer(frame, 0);

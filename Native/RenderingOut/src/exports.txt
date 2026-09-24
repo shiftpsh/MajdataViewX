@@ -1,5 +1,5 @@
 _renderingout_set_log_callback
 _video_encoder_create
-_video_encoder_submit_bgra
+_video_encoder_submit_rgba
 _video_encoder_mux_audio
 _video_encoder_free

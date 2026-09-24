@@ -4,12 +4,12 @@
  * Portable RenderingOut: a graphics-API-free H.264/AAC mp4 writer.
  *
  * Unlike the Windows D3D11 build (which receives a native texture pointer),
- * this build receives CPU-side BGRA pixels produced by AsyncGPUReadback, so
+ * this build receives CPU-side RGBA pixels produced by AsyncGPUReadback, so
  * the same source works under Metal, Vulkan and OpenGL.
  *
  * video_encoder_create / video_encoder_mux_audio / video_encoder_free keep
  * the exact signatures of the Windows DLL so ScreenRecorder.cs can share its
- * declarations; frame submission uses video_encoder_submit_bgra instead of
+ * declarations; frame submission uses video_encoder_submit_rgba instead of
  * video_encoder_submit_frame.
  */
 
@@ -62,7 +62,7 @@ video_encoder_create(
 );
 
 /*
- * pixels:        width x height BGRA8 pixels (the encoder's dimensions).
+ * pixels:        width x height RGBA8 pixels (the encoder's dimensions).
  * stride:        bytes between the starts of consecutive rows (>= width*4).
  * flip_vertical: nonzero if row 0 of pixels is the bottom of the image.
  *
@@ -73,7 +73,7 @@ video_encoder_create(
  * worker hit while encoding an earlier frame.
  */
 RENDERINGOUT_EXPORT int RENDERINGOUT_API
-video_encoder_submit_bgra(
+video_encoder_submit_rgba(
 	VideoEncoder* ve,
 	const void* pixels,
 	int stride,

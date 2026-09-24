@@ -1,5 +1,5 @@
 /*
- * Drives the plugin exactly as ScreenRecorder.cs does: create, submit BGRA
+ * Drives the plugin exactly as ScreenRecorder.cs does: create, submit RGBA
  * frames, register PCM, free. Verification of the output is done by
  * test/verify.sh with ffprobe.
  *
@@ -84,14 +84,14 @@ int main(int argc, char** argv)
 					p[3] = 255;
 					continue;
 				}
-				p[0] = bar ? 255 : (y < height / 2 ? 0 : 255);   /* B */
+				p[0] = bar ? 255 : (y < height / 2 ? 255 : 0);   /* R */
 				p[1] = bar ? 255 : 0;                            /* G */
-				p[2] = bar ? 255 : (y < height / 2 ? 255 : 0);   /* R */
+				p[2] = bar ? 255 : (y < height / 2 ? 0 : 255);   /* B */
 				p[3] = 255;
 			}
 		}
 
-		ret = video_encoder_submit_bgra(ve, pixels, stride, flip);
+		ret = video_encoder_submit_rgba(ve, pixels, stride, flip);
 		if (ret < 0)
 		{
 			fprintf(stderr, "submit failed at frame %d: %d\n", f, ret);

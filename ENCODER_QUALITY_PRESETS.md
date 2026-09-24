@@ -68,6 +68,6 @@ profile       = high
 
 - **libx264 保留 `tune=zerolatency`、h264_nvenc 保留 `delay=0`**：录制是同步单帧提交，`send_frame_and_write_packets` 对 `EAGAIN` 只重试一次即返回错误；启用 lookahead / B 帧重排会导致 `avcodec_send_frame` 持续 `EAGAIN` 被误判为失败。仅把码率控制从 ABR 换成恒定质量，不破坏录制流程。
 - **编码器回落顺序**（`initialize_encoder` 中）：`h264_nvenc(direct)` -> `h264_mf(direct)` -> `h264_nvenc` -> `h264_mf` -> `h264_amf` -> `h264_qsv` -> `libx264`。某编码器选项无效会自动跳到下一个。
-- **macOS**（`Native/RenderingOut`，经 AsyncGPUReadback 提交 BGRA）：`h264_videotoolbox` -> `libx264`。可用环境变量 `RENDERINGOUT_ENCODER=libx264` 强制指定。
+- **macOS**（`Native/RenderingOut`，经 AsyncGPUReadback 提交 RGBA）：`h264_videotoolbox` -> `libx264`。可用环境变量 `RENDERINGOUT_ENCODER=libx264` 强制指定。
 - `max_b_frames = 0`、`AV_CODEC_FLAG_LOW_DELAY` 保留不变；颜色矩阵按高度 ≥720 用 BT.709，否则 SMPTE170M。
 - 1080p60 音游默认推荐 **High**（x264 CRF 18 / NVENC CQ 18 / QSV ICQ 18 / AMF QVBR 18 / MF 16 Mbps），肉眼几乎无压缩痕迹且体积合理。
