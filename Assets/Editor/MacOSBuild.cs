@@ -17,7 +17,10 @@ namespace MajdataViewX.Editor
     ///   Unity -batchmode -quit -projectPath . -buildTarget OSXUniversal
     ///         -executeMethod MajdataViewX.Editor.MacOSBuild.Build
     ///         -outputPath build/MajdataViewX.app
+    ///         [-il2cppConfig Release]
     ///
+    /// -il2cppConfig overrides the project's IL2CPP configuration (Master)
+    /// for this build only; Release links far faster for local testing.
     /// Also accepts game-ci's -customBuildPath.
     /// </summary>
     public static class MacOSBuild
@@ -32,16 +35,31 @@ namespace MajdataViewX.Editor
             if (!output.EndsWith(".app", StringComparison.Ordinal))
                 output += ".app";
 
-            var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
+            var projectConfig = PlayerSettings.GetIl2CppCompilerConfiguration(NamedBuildTarget.Standalone);
+            var config = GetArgument("-il2cppConfig");
+            if (config != null)
+                PlayerSettings.SetIl2CppCompilerConfiguration(NamedBuildTarget.Standalone,
+                    Enum.Parse<Il2CppCompilerConfiguration>(config, true));
+
+            BuildReport report;
+            try
             {
-                scenes = EditorBuildSettings.scenes
-                    .Where(scene => scene.enabled)
-                    .Select(scene => scene.path)
-                    .ToArray(),
-                locationPathName = output,
-                target = BuildTarget.StandaloneOSX,
-                options = BuildOptions.None
-            });
+                report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
+                {
+                    scenes = EditorBuildSettings.scenes
+                        .Where(scene => scene.enabled)
+                        .Select(scene => scene.path)
+                        .ToArray(),
+                    locationPathName = output,
+                    target = BuildTarget.StandaloneOSX,
+                    options = BuildOptions.None
+                });
+            }
+            finally
+            {
+                // Keep ProjectSettings.asset (shared with Windows) unchanged.
+                PlayerSettings.SetIl2CppCompilerConfiguration(NamedBuildTarget.Standalone, projectConfig);
+            }
 
             if (report.summary.result != BuildResult.Succeeded)
                 EditorApplication.Exit(1);
