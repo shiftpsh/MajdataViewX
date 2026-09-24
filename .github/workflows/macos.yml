@@ -139,6 +139,19 @@ jobs:
         with:
           path: artifacts
 
+      # Note skins and sound effects are not in git; the viewer loads them
+      # from Skin/ and SFX/ next to the apps, and upstream ships them only in
+      # its release zips.
+      - name: Fetch Skin and SFX from the upstream release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          gh release download --repo re-poem/MajdataViewX --pattern 'MajdataX-*.zip' --output upstream.zip
+          unzip -q upstream.zip 'Skin/*' 'SFX/*' -d upstream
+          test -f upstream/Skin/TapSkins/tap.png
+          test -f upstream/SFX/answer.wav
+
       - name: Assemble packages
         run: |
           set -euxo pipefail
@@ -148,12 +161,19 @@ jobs:
             mkdir -p "$pkg"
             ditto -x -k artifacts/unity-build-macos/MajdataViewX.app.zip "$pkg"
             ditto -x -k "artifacts/editor-build-macos-$arch/MajdataEdit-Neo.app.zip" "$pkg"
+            ditto upstream/Skin "$pkg/Skin"
+            ditto upstream/SFX "$pkg/SFX"
             cat > "$pkg/README-macOS.txt" <<'EOF'
           MajdataX for macOS
 
-          Keep MajdataEdit-Neo.app and MajdataViewX.app in this folder: the editor
-          starts the viewer from here, and both store their settings and shared
-          files next to the apps.
+          Keep MajdataEdit-Neo.app, MajdataViewX.app, Skin and SFX in this
+          folder: the editor starts the viewer from here, the viewer loads note
+          skins and sounds from Skin and SFX, and both store their settings and
+          shared files next to the apps.
+
+          To use your own fonts in the viewer, put them in Skin/Fonts as
+          bold.otf (replaces FOT-Rodin Pro UB) and light.otf (FOT-Rodin Pro L);
+          .ttf and .ttc work too.
 
           These builds are not notarized. After unzipping, run once in Terminal:
 
