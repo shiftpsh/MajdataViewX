@@ -53,6 +53,8 @@ jobs:
           buildsPath: build
           versioning: None
           cacheUnityInstallationOnMac: true
+          # Pins a universal (Apple silicon + Intel) player.
+          buildMethod: MajdataViewX.Editor.MacOSBuild.Build
 
       - name: Check and sign the app bundle
         run: |
