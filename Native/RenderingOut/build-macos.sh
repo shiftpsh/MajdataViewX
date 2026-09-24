@@ -14,6 +14,8 @@
 #   MACOSX_DEPLOYMENT_TARGET   default 11.0
 #   JOBS                       default: all cores
 #   SKIP_TESTS=1               skip test/verify.sh (needs ffmpeg/ffprobe CLI)
+#   REUSE_DEPS=1               reuse FFmpeg/x264 already built in .work and
+#                              only rebuild the plugin
 set -euo pipefail
 
 FFMPEG_REF=release/8.1
@@ -44,10 +46,12 @@ fetch() { # url ref dir
     fi
 }
 
-step "Fetching FFmpeg $FFMPEG_REF and x264 $X264_REF"
-mkdir -p "$SRC"
-fetch https://github.com/FFmpeg/FFmpeg.git "$FFMPEG_REF" "$SRC/ffmpeg"
-fetch https://code.videolan.org/videolan/x264.git "$X264_REF" "$SRC/x264"
+if [ "${REUSE_DEPS:-0}" != 1 ]; then
+    step "Fetching FFmpeg $FFMPEG_REF and x264 $X264_REF"
+    mkdir -p "$SRC"
+    fetch https://github.com/FFmpeg/FFmpeg.git "$FFMPEG_REF" "$SRC/ffmpeg"
+    fetch https://code.videolan.org/videolan/x264.git "$X264_REF" "$SRC/x264"
+fi
 
 SLICES=()
 for arch in $ARCHS; do
@@ -62,73 +66,78 @@ for arch in $ARCHS; do
     prefix=$WORK/$arch/install
     build=$WORK/$arch/build
     flags="-arch $arch -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
-    rm -rf "$WORK/$arch"
-    mkdir -p "$prefix" "$build"
+    if [ "${REUSE_DEPS:-0}" = 1 ] && [ -f "$prefix/lib/libavcodec.a" ]; then
+        step "[$arch] Reusing FFmpeg and x264 from $prefix"
+        rm -rf "$build/renderingout"
+    else
+        rm -rf "$WORK/$arch"
+        mkdir -p "$prefix" "$build"
 
-    step "[$arch] x264 (static, 8-bit 4:2:0)"
-    (
-        cd "$SRC/x264"
-        make distclean >/dev/null 2>&1 || true
-        CC=clang ./configure \
-            --host="$host" \
-            --prefix="$prefix" \
-            --enable-static \
-            --disable-cli \
-            --enable-pic \
-            --bit-depth=8 \
-            --chroma-format=420 \
-            --disable-opencl \
-            --extra-cflags="$flags -Os" \
-            --extra-asflags="$([ "$arch" = arm64 ] && echo "$flags")" \
-            --extra-ldflags="$flags"
-        make -j"$JOBS"
-        make install
-    )
+        step "[$arch] x264 (static, 8-bit 4:2:0)"
+        (
+            cd "$SRC/x264"
+            make distclean >/dev/null 2>&1 || true
+            CC=clang ./configure \
+                --host="$host" \
+                --prefix="$prefix" \
+                --enable-static \
+                --disable-cli \
+                --enable-pic \
+                --bit-depth=8 \
+                --chroma-format=420 \
+                --disable-opencl \
+                --extra-cflags="$flags -Os" \
+                --extra-asflags="$([ "$arch" = arm64 ] && echo "$flags")" \
+                --extra-ldflags="$flags"
+            make -j"$JOBS"
+            make install
+        )
 
-    step "[$arch] FFmpeg (static, minimal)"
-    (
-        mkdir -p "$build/ffmpeg"
-        cd "$build/ffmpeg"
-        PKG_CONFIG_LIBDIR="$prefix/lib/pkgconfig" \
-        "$SRC/ffmpeg/configure" \
-            --prefix="$prefix" \
-            --arch="$ffarch" \
-            --target-os=darwin \
-            ${cross[@]+"${cross[@]}"} \
-            --cc=clang \
-            --extra-cflags="$flags" \
-            --extra-ldflags="$flags" \
-            --pkg-config=pkg-config \
-            --pkg-config-flags=--static \
-            --enable-static \
-            --disable-shared \
-            --enable-pic \
-            --enable-small \
-            --enable-gpl \
-            --disable-programs \
-            --disable-doc \
-            --disable-debug \
-            --disable-network \
-            --disable-autodetect \
-            --disable-avdevice \
-            --disable-avfilter \
-            --enable-pthreads \
-            --disable-everything \
-            --enable-avcodec \
-            --enable-avformat \
-            --enable-avutil \
-            --enable-swscale \
-            --enable-swresample \
-            --enable-encoder=aac \
-            --enable-encoder=h264_videotoolbox \
-            --enable-encoder=libx264 \
-            --enable-muxer=mov,mp4 \
-            --enable-protocol=file \
-            --enable-libx264 \
-            --enable-videotoolbox
-        make -j"$JOBS"
-        make install
-    )
+        step "[$arch] FFmpeg (static, minimal)"
+        (
+            mkdir -p "$build/ffmpeg"
+            cd "$build/ffmpeg"
+            PKG_CONFIG_LIBDIR="$prefix/lib/pkgconfig" \
+            "$SRC/ffmpeg/configure" \
+                --prefix="$prefix" \
+                --arch="$ffarch" \
+                --target-os=darwin \
+                ${cross[@]+"${cross[@]}"} \
+                --cc=clang \
+                --extra-cflags="$flags" \
+                --extra-ldflags="$flags" \
+                --pkg-config=pkg-config \
+                --pkg-config-flags=--static \
+                --enable-static \
+                --disable-shared \
+                --enable-pic \
+                --enable-small \
+                --enable-gpl \
+                --disable-programs \
+                --disable-doc \
+                --disable-debug \
+                --disable-network \
+                --disable-autodetect \
+                --disable-avdevice \
+                --disable-avfilter \
+                --enable-pthreads \
+                --disable-everything \
+                --enable-avcodec \
+                --enable-avformat \
+                --enable-avutil \
+                --enable-swscale \
+                --enable-swresample \
+                --enable-encoder=aac \
+                --enable-encoder=h264_videotoolbox \
+                --enable-encoder=libx264 \
+                --enable-muxer=mov,mp4 \
+                --enable-protocol=file \
+                --enable-libx264 \
+                --enable-videotoolbox
+            make -j"$JOBS"
+            make install
+        )
+    fi
 
     step "[$arch] RenderingOut"
     cmake -S "$ROOT" -B "$build/renderingout" \
