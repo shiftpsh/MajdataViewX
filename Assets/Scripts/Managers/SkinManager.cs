@@ -4,6 +4,8 @@ using MajdataViewX.Utils.Extensions;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using TMPro;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
@@ -485,6 +487,85 @@ namespace MajdataViewX.Managers
         private void Start()
         {
             GetComponent<SpriteRenderer>().sprite = Outline;
+            ApplyFontOverrides();
+        }
+
+        // ============ Font Override ============
+        // Optional fonts in Skin/Fonts replace the built-in FOT-Rodin Pro
+        // faces at runtime, so fonts that may not be redistributed never have
+        // to be committed or shipped:
+        //   bold.otf/.ttf/.ttc  -> FOT-Rodin Pro UB (and its Combo variants)
+        //   light.otf/.ttf/.ttc -> FOT-Rodin Pro L
+        private static readonly (string File, string AssetPrefix)[] FontOverrides =
+        {
+            ("bold", "FOT-Rodin Pro UB"),
+            ("light", "FOT-Rodin Pro L"),
+        };
+
+        private static void ApplyFontOverrides()
+        {
+            var fontDirectory = Path.Combine(MajEnv.GetPath("Skin"), "Fonts");
+            if (!Directory.Exists(fontDirectory))
+                return;
+
+            ShaderUtilities.GetShaderPropertyIDs();
+            var texts = FindObjectsByType<TMP_Text>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+
+            foreach (var (file, assetPrefix) in FontOverrides)
+            {
+                var path = new[] { ".otf", ".ttf", ".ttc" }
+                    .Select(extension => Path.Combine(fontDirectory, file + extension))
+                    .FirstOrDefault(File.Exists);
+                if (path == null)
+                    continue;
+
+                var replacements = new Dictionary<TMP_FontAsset, TMP_FontAsset>();
+                var materials = new Dictionary<Material, Material>();
+                foreach (var text in texts)
+                {
+                    var original = text.font;
+                    if (original == null || !original.name.StartsWith(assetPrefix, StringComparison.Ordinal))
+                        continue;
+
+                    if (!replacements.TryGetValue(original, out var replacement))
+                    {
+                        // Same sampling size and padding as the original, so
+                        // outline/underlay widths in its materials still fit.
+                        replacement = TMP_FontAsset.CreateFontAsset(path, 0,
+                            (int)original.faceInfo.pointSize, original.atlasPadding,
+                            original.atlasRenderMode, original.atlasWidth, original.atlasHeight);
+                        if (replacement == null)
+                        {
+                            Debug.LogError($"Could not load font override {path}");
+                            break;
+                        }
+
+                        replacement.isMultiAtlasTexturesEnabled = true;
+                        // Glyphs the override lacks still render in the original.
+                        replacement.fallbackFontAssetTable = new List<TMP_FontAsset> { original };
+                        replacements[original] = replacement;
+                    }
+
+                    // Keep the text's styled material (combo outlines, glow),
+                    // pointed at the replacement's atlas.
+                    var styled = text.fontSharedMaterial;
+                    if (!materials.TryGetValue(styled, out var material))
+                    {
+                        material = new Material(styled) { name = styled.name + " (override)" };
+                        material.SetTexture(ShaderUtilities.ID_MainTex, replacement.atlasTexture);
+                        material.SetFloat(ShaderUtilities.ID_TextureWidth, replacement.atlasWidth);
+                        material.SetFloat(ShaderUtilities.ID_TextureHeight, replacement.atlasHeight);
+                        material.SetFloat(ShaderUtilities.ID_GradientScale, replacement.atlasPadding + 1);
+                        materials[styled] = material;
+                    }
+
+                    text.font = replacement;
+                    text.fontSharedMaterial = material;
+                }
+
+                if (replacements.Count > 0)
+                    Debug.Log($"Font override {Path.GetFileName(path)} applied to {replacements.Count} font asset(s).");
+            }
         }
 
         private void Add(List<(string path, int index, Texture2D tex)> list, NoteSp index, string path)
