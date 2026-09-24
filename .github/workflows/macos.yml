@@ -1,0 +1,186 @@
+name: macOS Nightly Build
+
+# Builds MajdataViewX (universal) + MajdataEdit-Neo (per architecture) for
+# macOS and publishes them as the "nightly-macos" pre-release. Kept separate
+# from nightly.yml so the Windows pipeline stays identical to upstream.
+#
+# Needs the same secrets as nightly.yml: UNITY_EMAIL, UNITY_PASSWORD,
+# UNITY_LICENSE (a Personal license works on macOS runners).
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-macos
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  UNITY_VERSION: '6000.3.19f1'
+  # MajdataEdit-Neo with the macOS bundle layout support (MajEnv.MajBase,
+  # Packaging/macos/build-app.sh).
+  EDITOR_REPO: 'shiftpsh/MajdataEdit-Neo'
+  EDITOR_REF: 'macos'
+
+jobs:
+  build-unity:
+    runs-on: macos-latest
+    env:
+      UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+      UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+      UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+    steps:
+      - name: Checkout MajdataViewX
+        uses: actions/checkout@v4
+
+      - name: Cache Unity Library
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-StandaloneOSX-${{ hashFiles('ProjectSettings/ProjectSettings.asset', 'Packages/manifest.json') }}
+          restore-keys: |
+            Library-StandaloneOSX-
+
+      - name: Build Unity project
+        uses: game-ci/unity-builder@v4
+        with:
+          unityVersion: ${{ env.UNITY_VERSION }}
+          targetPlatform: StandaloneOSX
+          projectPath: .
+          buildName: MajdataViewX
+          buildsPath: build
+          versioning: None
+          cacheUnityInstallationOnMac: true
+
+      - name: Check and sign the app bundle
+        run: |
+          set -euxo pipefail
+          app=$(find build/StandaloneOSX -maxdepth 2 -name '*.app' -type d | head -1)
+          test -n "$app"
+          mkdir -p out
+          mv "$app" out/MajdataViewX.app
+          app=out/MajdataViewX.app
+
+          exe="$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          echo "executable architectures: $(lipo -archs "$exe")"
+          lipo -archs "$exe" | grep -qw arm64
+          lipo -archs "$exe" | grep -qw x86_64
+
+          # Native plugins the viewer needs at runtime.
+          for lib in libRenderingOut.dylib libbass.dylib libcimai.dylib; do
+            test -f "$app/Contents/PlugIns/$lib"
+          done
+
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict "$app"
+          # Preserves permissions and symlinks, unlike upload-artifact.
+          ditto -c -k --keepParent "$app" MajdataViewX.app.zip
+
+      - name: Upload Unity build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unity-build-macos
+          path: MajdataViewX.app.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  build-editor:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [arm64, x64]
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout MajdataEdit-Neo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.EDITOR_REPO }}
+          ref: ${{ env.EDITOR_REF }}
+          path: MajdataEdit-Neo
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Read version from csproj
+        id: version
+        run: |
+          v=$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' MajdataEdit-Neo/MajdataEdit-Neo.csproj | head -1)
+          echo "version=${v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build MajdataEdit-Neo.app
+        run: |
+          set -euxo pipefail
+          MajdataEdit-Neo/Packaging/macos/build-app.sh ${{ matrix.arch }} out
+          ditto -c -k --keepParent out/MajdataEdit-Neo.app MajdataEdit-Neo.app.zip
+
+      - name: Upload Editor build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-build-macos-${{ matrix.arch }}
+          path: MajdataEdit-Neo.app.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-nightly:
+    needs: [build-unity, build-editor]
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.build-editor.outputs.version }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble packages
+        run: |
+          set -euxo pipefail
+          SHORT=${GITHUB_SHA::7}
+          for arch in arm64 x64; do
+            pkg=pkg-$arch/MajdataX
+            mkdir -p "$pkg"
+            ditto -x -k artifacts/unity-build-macos/MajdataViewX.app.zip "$pkg"
+            ditto -x -k "artifacts/editor-build-macos-$arch/MajdataEdit-Neo.app.zip" "$pkg"
+            cat > "$pkg/README-macOS.txt" <<'EOF'
+          MajdataX for macOS
+
+          Keep MajdataEdit-Neo.app and MajdataViewX.app in this folder: the editor
+          starts the viewer from here, and both store their settings and shared
+          files next to the apps.
+
+          These builds are not notarized. After unzipping, run once in Terminal:
+
+              xattr -dr com.apple.quarantine /path/to/MajdataX
+
+          then open MajdataEdit-Neo.app.
+          EOF
+            ditto -c -k --keepParent "$pkg" "MajdataX-v${VERSION}-${SHORT}-macos-$arch.zip"
+          done
+          ls -l ./*.zip
+
+      - name: Publish to nightly-macos release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          SHORT=${GITHUB_SHA::7}
+          gh release delete nightly-macos --cleanup-tag -y --repo "$GITHUB_REPOSITORY" || true
+          notes="Nightly macOS build of MajdataViewX + MajdataEdit-Neo.
+
+          - arm64: Apple Silicon Macs
+          - x64: Intel Macs
+
+          Version: v${VERSION}
+          Commit:  ${SHORT}
+          Built:   $(date -u +'%Y-%m-%d %H:%M UTC')"
+          gh release create nightly-macos ./*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Nightly macOS (v${VERSION}-${SHORT})" \
+            --notes "$notes" \
+            --prerelease
