@@ -171,9 +171,10 @@ jobs:
           skins and sounds from Skin and SFX, and both store their settings and
           shared files next to the apps.
 
-          To use your own fonts in the viewer, put them in Skin/Fonts as
-          bold.otf (replaces FOT-Rodin Pro UB) and light.otf (FOT-Rodin Pro L);
-          .ttf and .ttc work too.
+          To use your own fonts in the viewer, put them in Skin/Fonts named
+          after the built-in font they replace: Minimoon.otf (most on-screen
+          text), FOT-Rodin Pro UB.otf and FOT-Rodin Pro L.otf; .ttf and .ttc
+          work too.
 
           These builds are not notarized. After unzipping, run once in Terminal:
 

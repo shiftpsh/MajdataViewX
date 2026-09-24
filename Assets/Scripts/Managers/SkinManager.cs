@@ -491,81 +491,151 @@ namespace MajdataViewX.Managers
         }
 
         // ============ Font Override ============
-        // Optional fonts in Skin/Fonts replace the built-in FOT-Rodin Pro
-        // faces at runtime, so fonts that may not be redistributed never have
-        // to be committed or shipped:
-        //   bold.otf/.ttf/.ttc  -> FOT-Rodin Pro UB (and its Combo variants)
-        //   light.otf/.ttf/.ttc -> FOT-Rodin Pro L
-        private static readonly (string File, string AssetPrefix)[] FontOverrides =
-        {
-            ("bold", "FOT-Rodin Pro UB"),
-            ("light", "FOT-Rodin Pro L"),
-        };
+        // A font file in Skin/Fonts named after a built-in font family
+        // replaces every variant of it at runtime (e.g. Minimoon.otf covers
+        // "Minimoon SDF", "Minimoon SDF Combo", ...; FOT-Rodin Pro UB.ttf covers
+        // the Rodin UB assets). Fonts that may not be redistributed therefore
+        // never have to be committed or shipped.
+        private static readonly string[] FontExtensions = { ".otf", ".ttf", ".ttc" };
+        private static readonly Dictionary<string, string> FontOverridePaths = new();
+        private static readonly Dictionary<TMP_FontAsset, TMP_FontAsset> FontReplacements = new();
+        private static readonly Dictionary<Material, Material> FontMaterials = new();
+
+        /// <summary>
+        /// The Skin/Fonts replacement for a built-in font asset, or the asset
+        /// itself. Scripts that assign fonts at runtime must go through this.
+        /// </summary>
+        public static TMP_FontAsset ResolveFont(TMP_FontAsset font) => GetFontReplacement(font) ?? font;
 
         private static void ApplyFontOverrides()
         {
-            var fontDirectory = Path.Combine(MajEnv.GetPath("Skin"), "Fonts");
-            if (!Directory.Exists(fontDirectory))
-                return;
-
-            ShaderUtilities.GetShaderPropertyIDs();
-            var texts = FindObjectsByType<TMP_Text>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-
-            foreach (var (file, assetPrefix) in FontOverrides)
+            foreach (var text in FindObjectsByType<TMP_Text>(FindObjectsInactive.Include, FindObjectsSortMode.None))
             {
-                var path = new[] { ".otf", ".ttf", ".ttc" }
-                    .Select(extension => Path.Combine(fontDirectory, file + extension))
-                    .FirstOrDefault(File.Exists);
-                if (path == null)
+                var original = text.font;
+                var replacement = GetFontReplacement(original);
+                if (replacement == null)
                     continue;
 
-                var replacements = new Dictionary<TMP_FontAsset, TMP_FontAsset>();
-                var materials = new Dictionary<Material, Material>();
-                foreach (var text in texts)
-                {
-                    var original = text.font;
-                    if (original == null || !original.name.StartsWith(assetPrefix, StringComparison.Ordinal))
-                        continue;
-
-                    if (!replacements.TryGetValue(original, out var replacement))
-                    {
-                        // Same sampling size and padding as the original, so
-                        // outline/underlay widths in its materials still fit.
-                        replacement = TMP_FontAsset.CreateFontAsset(path, 0,
-                            (int)original.faceInfo.pointSize, original.atlasPadding,
-                            original.atlasRenderMode, original.atlasWidth, original.atlasHeight);
-                        if (replacement == null)
-                        {
-                            Debug.LogError($"Could not load font override {path}");
-                            break;
-                        }
-
-                        replacement.isMultiAtlasTexturesEnabled = true;
-                        // Glyphs the override lacks still render in the original.
-                        replacement.fallbackFontAssetTable = new List<TMP_FontAsset> { original };
-                        replacements[original] = replacement;
-                    }
-
-                    // Keep the text's styled material (combo outlines, glow),
-                    // pointed at the replacement's atlas.
-                    var styled = text.fontSharedMaterial;
-                    if (!materials.TryGetValue(styled, out var material))
-                    {
-                        material = new Material(styled) { name = styled.name + " (override)" };
-                        material.SetTexture(ShaderUtilities.ID_MainTex, replacement.atlasTexture);
-                        material.SetFloat(ShaderUtilities.ID_TextureWidth, replacement.atlasWidth);
-                        material.SetFloat(ShaderUtilities.ID_TextureHeight, replacement.atlasHeight);
-                        material.SetFloat(ShaderUtilities.ID_GradientScale, replacement.atlasPadding + 1);
-                        materials[styled] = material;
-                    }
-
-                    text.font = replacement;
-                    text.fontSharedMaterial = material;
-                }
-
-                if (replacements.Count > 0)
-                    Debug.Log($"Font override {Path.GetFileName(path)} applied to {replacements.Count} font asset(s).");
+                // Texts on the asset's default material get the replacement's
+                // styled default; material presets get their own styled copy.
+                var styled = text.fontSharedMaterial;
+                var material = styled == null || styled == original.material
+                    ? replacement.material
+                    : GetStyledFontMaterial(styled, replacement);
+                text.font = replacement;
+                text.fontSharedMaterial = material;
             }
+        }
+
+        private static TMP_FontAsset GetFontReplacement(TMP_FontAsset original)
+        {
+            if (original == null)
+                return null;
+            if (FontReplacements.TryGetValue(original, out var cached))
+                return cached;
+            FontReplacements[original] = null;
+
+            // "Minimoon SDF Combo" -> "Minimoon"
+            var nameEnd = original.name.IndexOf(" SDF", StringComparison.Ordinal);
+            var family = nameEnd < 0 ? original.name : original.name[..nameEnd];
+            if (!FontOverridePaths.TryGetValue(family, out var path))
+            {
+                var fontDirectory = Path.Combine(MajEnv.GetPath("Skin"), "Fonts");
+                path = FontExtensions
+                    .Select(extension => Path.Combine(fontDirectory, family + extension))
+                    .FirstOrDefault(File.Exists);
+                FontOverridePaths[family] = path;
+            }
+            if (path == null)
+                return null;
+
+            // Same sampling size and padding as the original, so outline and
+            // underlay widths in its materials still fit.
+            var replacement = TMP_FontAsset.CreateFontAsset(path, 0,
+                (int)original.faceInfo.pointSize, original.atlasPadding,
+                original.atlasRenderMode, original.atlasWidth, original.atlasHeight);
+            if (replacement == null)
+            {
+                Debug.LogError($"Could not load font override {path}");
+                return null;
+            }
+
+            replacement.name = $"{original.name} ({Path.GetFileName(path)})";
+            replacement.isMultiAtlasTexturesEnabled = true;
+            // Glyphs the override lacks still render in the original.
+            replacement.fallbackFontAssetTable = new List<TMP_FontAsset> { original };
+            MatchFaceMetrics(original, replacement);
+            ShaderUtilities.GetShaderPropertyIDs();
+            replacement.material = GetStyledFontMaterial(original.material, replacement);
+
+            FontReplacements[original] = replacement;
+            Debug.Log($"Font override: {original.name} -> {Path.GetFileName(path)}");
+            return replacement;
+        }
+
+        // Words the HUD shows; a replacement is scaled so none of them ends up
+        // wider than in the original, since the layouts have fixed widths.
+        private static readonly string[] FontFitSamples =
+        {
+            "CriticalPf", "Perfect", "Great", "Good", "Miss", "Fast", "Late",
+            "FiNALE", "DELUXE", "Rate:", "TAP:", "HOD:", "SLD:", "TOH:", "BRK:", "ALL:",
+            "MOD:", "Enable", "COMBO", "ACHIEVEMENT", "0123456789", "100.0000%",
+        };
+
+        // Scales the replacement to the original's cap height (or less, if
+        // it runs wider) and gives it the original's line metrics, so
+        // layouts built for the original still fit.
+        private static void MatchFaceMetrics(TMP_FontAsset original, TMP_FontAsset replacement)
+        {
+            var from = original.faceInfo;
+            var to = replacement.faceInfo;
+            var scale = from.capLine > 0 && to.capLine > 0 ? from.capLine / to.capLine : 1f;
+
+            foreach (var sample in FontFitSamples)
+            {
+                var originalWidth = MeasureAdvance(original, sample) * from.scale;
+                var replacementWidth = MeasureAdvance(replacement, sample);
+                if (originalWidth > 0 && replacementWidth > 0)
+                    scale = Mathf.Min(scale, originalWidth / replacementWidth);
+            }
+
+            var totalScale = from.scale * scale;
+            to.scale = totalScale;
+            to.lineHeight = from.lineHeight * from.scale / totalScale;
+            to.ascentLine = from.ascentLine * from.scale / totalScale;
+            to.descentLine = from.descentLine * from.scale / totalScale;
+            replacement.faceInfo = to;
+        }
+
+        // Sum of glyph advances at the asset's sampling size; 0 if any glyph
+        // is missing (the sample then does not constrain the scale).
+        private static float MeasureAdvance(TMP_FontAsset font, string sample)
+        {
+            font.TryAddCharacters(sample);
+            var width = 0f;
+            foreach (var c in sample)
+            {
+                if (!font.characterLookupTable.TryGetValue(c, out var character) || character.glyph == null)
+                    return 0f;
+                width += character.glyph.metrics.horizontalAdvance;
+            }
+            return width;
+        }
+
+        private static Material GetStyledFontMaterial(Material styled, TMP_FontAsset replacement)
+        {
+            if (FontMaterials.TryGetValue(styled, out var material))
+                return material;
+
+            // Keep outlines, glow and colors; sample the replacement's atlas.
+            material = new Material(styled) { name = styled.name + " (override)" };
+            material.SetTexture(ShaderUtilities.ID_MainTex, replacement.atlasTexture);
+            material.SetFloat(ShaderUtilities.ID_TextureWidth, replacement.atlasWidth);
+            material.SetFloat(ShaderUtilities.ID_TextureHeight, replacement.atlasHeight);
+            material.SetFloat(ShaderUtilities.ID_GradientScale, replacement.atlasPadding + 1);
+            ShaderUtilities.UpdateShaderRatios(material);
+            FontMaterials[styled] = material;
+            return material;
         }
 
         private void Add(List<(string path, int index, Texture2D tex)> list, NoteSp index, string path)

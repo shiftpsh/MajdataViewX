@@ -152,12 +152,12 @@ namespace MajdataViewX.Managers
                         legacyUIRoot.SetActive(true);
                         trgUIRoot.SetActive(false);
 
-                        statusAchievement.font = LegacyUIComboFont;
-                        headerAchievement.font = LegacyUIComboHeaderFont;
-                        statusCombo.font = LegacyUIComboFont;
-                        headerCombo.font = LegacyUIComboHeaderFont;
-                        statusDXScore.font = LegacyUIComboFont;
-                        headerDXScore.font = LegacyUIComboHeaderFont;
+                        statusAchievement.font = SkinManager.ResolveFont(LegacyUIComboFont);
+                        headerAchievement.font = SkinManager.ResolveFont(LegacyUIComboHeaderFont);
+                        statusCombo.font = SkinManager.ResolveFont(LegacyUIComboFont);
+                        headerCombo.font = SkinManager.ResolveFont(LegacyUIComboHeaderFont);
+                        statusDXScore.font = SkinManager.ResolveFont(LegacyUIComboFont);
+                        headerDXScore.font = SkinManager.ResolveFont(LegacyUIComboHeaderFont);
                         break;
                     }
                 case UIType.TrgUI:
@@ -166,12 +166,12 @@ namespace MajdataViewX.Managers
                         legacyUIRoot.SetActive(false);
                         trgUIRoot.SetActive(true);
 
-                        statusAchievement.font = TrgUIComboFont;
-                        headerAchievement.font = TrgUIComboHeaderFont;
-                        statusCombo.font = TrgUIComboFont;
-                        headerCombo.font = TrgUIComboHeaderFont;
-                        statusDXScore.font = TrgUIComboFont;
-                        headerDXScore.font = TrgUIComboHeaderFont;
+                        statusAchievement.font = SkinManager.ResolveFont(TrgUIComboFont);
+                        headerAchievement.font = SkinManager.ResolveFont(TrgUIComboHeaderFont);
+                        statusCombo.font = SkinManager.ResolveFont(TrgUIComboFont);
+                        headerCombo.font = SkinManager.ResolveFont(TrgUIComboHeaderFont);
+                        statusDXScore.font = SkinManager.ResolveFont(TrgUIComboFont);
+                        headerDXScore.font = SkinManager.ResolveFont(TrgUIComboHeaderFont);
                         break;
                     }
             }
