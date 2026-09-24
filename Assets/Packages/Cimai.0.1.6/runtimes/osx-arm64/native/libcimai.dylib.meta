@@ -48,7 +48,7 @@ PluginImporter:
       enabled: 0
       settings: {}
     OSXUniversal:
-      enabled: 1
+      enabled: 0
       settings:
         CPU: ARM64
     Win:
