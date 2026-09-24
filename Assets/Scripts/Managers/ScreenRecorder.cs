@@ -1,3 +1,11 @@
+// Windows uses the D3D11 RenderingOut.dll (zero-copy from the native
+// texture); other platforms use the portable build in Native/RenderingOut,
+// fed through AsyncGPUReadback. In the Editor the host OS decides, not the
+// active build target.
+#if UNITY_EDITOR_WIN || (!UNITY_EDITOR && UNITY_STANDALONE_WIN)
+#define RENDERINGOUT_D3D11
+#endif
+
 using Cysharp.Threading.Tasks;
 using JetBrains.Annotations;
 using MajdataViewX.Types.Rendering;
@@ -8,6 +16,11 @@ using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine;
 using UnityEngine.UI;
 using static MajdataViewX.Base.MajCtx;
+#if !RENDERINGOUT_D3D11
+using System.Collections.Generic;
+using Unity.Collections;
+using UnityEngine.Rendering;
+#endif
 
 namespace MajdataViewX.Managers
 {
@@ -23,10 +36,42 @@ namespace MajdataViewX.Managers
             int fps,
             [MarshalAs(UnmanagedType.LPStr)] string filename);
 
+#if RENDERINGOUT_D3D11
         [DllImport(EncoderDllName, CallingConvention = CallingConvention.StdCall)]
         private static extern int video_encoder_submit_frame(
             IntPtr encoder,
             IntPtr nativeTexture);
+#else
+        [DllImport(EncoderDllName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int video_encoder_submit_bgra(
+            IntPtr encoder,
+            IntPtr pixels,
+            int stride,
+            int flipVertical);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void NativeLogCallback(int level, IntPtr message);
+
+        [DllImport(EncoderDllName, CallingConvention = CallingConvention.Cdecl)]
+        private static extern void renderingout_set_log_callback(NativeLogCallback callback);
+
+        // Held in a static field so the GC never collects the native callback.
+        private static readonly NativeLogCallback LogCallback = OnNativeLog;
+
+        [AOT.MonoPInvokeCallback(typeof(NativeLogCallback))]
+        private static void OnNativeLog(int level, IntPtr message)
+        {
+            var text = Marshal.PtrToStringUTF8(message);
+            if (level == 0)
+                Debug.Log(text);
+            else
+                Debug.LogError(text);
+        }
+
+        // Readbacks allowed in flight before the capture loop waits on the
+        // oldest one; bounds both memory and output latency.
+        private const int MaxPendingReadbacks = 3;
+#endif
 
         [DllImport(EncoderDllName, CallingConvention = CallingConvention.StdCall)]
         private static extern int video_encoder_mux_audio(
@@ -98,6 +143,9 @@ namespace MajdataViewX.Managers
                 autoGenerateMips = false
             };
             var encoder = IntPtr.Zero;
+#if !RENDERINGOUT_D3D11
+            var pendingReadbacks = new Queue<AsyncGPUReadbackRequest>();
+#endif
 
             try
             {
@@ -108,6 +156,9 @@ namespace MajdataViewX.Managers
                 var outPath = Path.Combine(maidataPath, finalName);
                 if (File.Exists(outPath)) File.Delete(outPath);
 
+#if !RENDERINGOUT_D3D11
+                renderingout_set_log_callback(LogCallback);
+#endif
                 encoder = video_encoder_create(
                     (int)quality,
                     width,
@@ -128,6 +179,7 @@ namespace MajdataViewX.Managers
                     _audioManager.UpdateRecordingAudioFrame(recordingElapsedTime, frameEndTime);
 
                     ScreenCapture.CaptureScreenshotIntoRenderTexture(captureTexture);
+#if RENDERINGOUT_D3D11
                     var nativeTexture = captureTexture.GetNativeTexturePtr();
                     if (nativeTexture == IntPtr.Zero)
                         throw new InvalidOperationException(
@@ -137,10 +189,20 @@ namespace MajdataViewX.Managers
                     if (submitResult < 0)
                         throw new InvalidOperationException(
                             $"RenderingOut failed to encode a video frame ({submitResult}).");
+#else
+                    // The copy is queued on the GPU now, so reusing
+                    // captureTexture next frame cannot race with it.
+                    pendingReadbacks.Enqueue(
+                        AsyncGPUReadback.Request(captureTexture, 0, TextureFormat.BGRA32));
+                    SubmitCompletedReadbacks(encoder, pendingReadbacks, width, height, MaxPendingReadbacks);
+#endif
 
                     recordingElapsedTime = frameEndTime;
                 }
 
+#if !RENDERINGOUT_D3D11
+                SubmitCompletedReadbacks(encoder, pendingReadbacks, width, height, 0);
+#endif
                 _audioManager.EndRecordingAudio((float)recordingElapsedTime);
                 MuxRecordingAudio(encoder);
                 FreeEncoder(ref encoder);
@@ -171,10 +233,61 @@ namespace MajdataViewX.Managers
                     OpenFileLocation(resultPath);
 
                 RenderTexture.active = null;
+#if !RENDERINGOUT_D3D11
+                // Readbacks abandoned by an exception must finish before
+                // their source texture goes away.
+                AsyncGPUReadback.WaitAllRequests();
+#endif
                 captureTexture.Release();
                 Destroy(captureTexture);
             }
         }
+
+#if !RENDERINGOUT_D3D11
+        // Submits finished readbacks in capture order, so frame timestamps
+        // stay sequential. Waits on the oldest while more than maxPending
+        // are still in flight.
+        private static void SubmitCompletedReadbacks(IntPtr encoder,
+            Queue<AsyncGPUReadbackRequest> pending, int width, int height, int maxPending)
+        {
+            while (pending.Count > 0)
+            {
+                var request = pending.Peek();
+                if (!request.done)
+                {
+                    if (pending.Count <= maxPending)
+                        return;
+                    request.WaitForCompletion();
+                }
+
+                pending.Dequeue();
+                if (request.hasError)
+                    throw new InvalidOperationException(
+                        "The GPU readback of a recorded frame failed.");
+                SubmitPixels(encoder, request.GetData<byte>(), width, height);
+            }
+        }
+
+        private static unsafe void SubmitPixels(IntPtr encoder,
+            NativeArray<byte> pixels, int width, int height)
+        {
+            var stride = width * 4;
+            if (pixels.Length < stride * height)
+                throw new InvalidOperationException(
+                    $"The recorded frame is {pixels.Length} bytes, expected {stride * height}.");
+
+            // Row 0 of the readback is the top of the image unless the
+            // graphics API is bottom-up (OpenGL).
+            var submitResult = video_encoder_submit_bgra(
+                encoder,
+                (IntPtr)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(pixels),
+                stride,
+                SystemInfo.graphicsUVStartsAtTop ? 0 : 1);
+            if (submitResult < 0)
+                throw new InvalidOperationException(
+                    $"RenderingOut failed to encode a video frame ({submitResult}).");
+        }
+#endif
 
         private static unsafe void MuxRecordingAudio(IntPtr encoder)
         {

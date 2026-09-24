@@ -24,6 +24,7 @@ PluginImporter:
       settings:
         CPU: x86_64
         DefaultValueInitialized: true
+        OS: Windows
     Win:
       enabled: 0
       settings:
